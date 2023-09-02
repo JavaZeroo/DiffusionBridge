@@ -123,7 +123,7 @@ class model(torch.nn.Module):
 
         return output
 
-    def my_simulate_bridge_backwards(self, score_net, initial_state, terminal_state, epsilon, num_samples = 1, modify = False, full_score = False, new_num_steps = None):
+    def my_simulate_bridge_backwards(self, score_net, initial_state, terminal_state, epsilon, num_samples = 1, modify = False, full_score = False, new_num_steps = None, device='cpu'):
         """
         Simulate diffusion bridge process backwards using Euler-Maruyama discretization.
 
@@ -179,7 +179,6 @@ class model(torch.nn.Module):
 
         trajectories = torch.zeros(N, M+1, self.d)
         trajectories[:, M, :] = Z
-        logdensity = torch.zeros(N)
         scaled_brownian = torch.zeros(N, M, self.d)
         score_evaluations = torch.zeros(N, M, self.d)
 
@@ -188,10 +187,15 @@ class model(torch.nn.Module):
             stepsize = stepsizes[m-1]
             t = timesteps[m]
             t_next = timesteps[m-1]
+            score_net.to(device)
+            t = t.repeat((N,1)).to(device)
+            Z = Z.to(device)
             if full_score:
-                score = score_net(t.repeat((N,1)), Z, X0) # size (N, d)
+                X0 = X0.to(device)
+                score = score_net(t, Z, X0) # size (N, d)
             else:
                 score = score_net(t.repeat((N,1)), Z) # size (N, d)
+            score = score.cpu()
             if self.debug:
                 print(score.shape)
             score_evaluations[:, m-1, :] = score
@@ -204,7 +208,6 @@ class model(torch.nn.Module):
                     scaling = stepsize
                 brownian = torch.sqrt(scaling) * torch.randn(Z.shape) # size (N x d)
                 Z = euler + self.sigma * brownian
-                logdensity += normal_logpdf(Z, euler, scaling * self.Sigma) 
                 trajectories[:, m-1, :] = Z
                 scaled_brownian[:, m-1, :] = - (self.invSigma / scaling) * self.sigma * brownian
             else:
@@ -218,7 +221,7 @@ class model(torch.nn.Module):
                 scaled_brownian[:, 0, :] = - (self.invSigma / scaling) * (X0 - euler)
 
         # output
-        output = {'trajectories' : trajectories, 'logdensity' : logdensity, 'scaled_brownian' : scaled_brownian, 'score_evaluations' : score_evaluations}
+        output = {'trajectories' : trajectories, 'scaled_brownian' : scaled_brownian, 'score_evaluations' : score_evaluations}
         
         return output
     
@@ -784,7 +787,7 @@ class model(torch.nn.Module):
                 TimeElapsedColumn(),
                 transient=False,
             ) as progress:
-            task1 = progress.add_task("[red]Training whole dataset (lr: X) (loss=X)", total=num_iterations)
+            task1 = progress.add_task("[red]Training full_score_transition (lr: X) (loss=X)", total=num_iterations)
             while not progress.finished:
                 for i in range(num_iterations):
                     # simulate initial states
@@ -875,7 +878,7 @@ class model(torch.nn.Module):
 
         return grad
 
-    def my_learn_score_marginal(self, score_transition_net, simulate_initial_state, simulate_terminal_state, epsilon, minibatch, num_initial_per_batch, num_iterations, learning_rate, ema_momentum, scheduler=None):
+    def my_learn_score_marginal(self, score_transition_net, simulate_initial_state, simulate_terminal_state, epsilon, minibatch, num_initial_per_batch, num_iterations, learning_rate, ema_momentum, device='cpu', scheduler=None):
         """
         Learn approximation of score of marginal (diffusion bridge) density using score matching.
 
@@ -903,9 +906,9 @@ class model(torch.nn.Module):
 
         loss_values : value of loss function during learning
         """
-
+        d = self.d
         M = self.num_steps
-        N = minibatch
+        N = num_initial_per_batch
         timesteps = self.time[0:M].reshape((1,M,1)).repeat((N,1,1)) # size (N, M, 1)
         timesteps_flatten = timesteps.flatten(start_dim = 0, end_dim = 1) # size (N*M, 1)
         loss_values = torch.zeros(num_iterations)
@@ -916,19 +919,22 @@ class model(torch.nn.Module):
 
         # optimization
         optimizer = torch.optim.Adam(score_net.parameters(), lr = learning_rate)
-        num_batches = 10 
+        num_batches = 1
         num_samples = num_batches * N
         num_repeats = int(num_iterations / num_batches)
         iteration = 1
         if scheduler == 'cos':
             scheduler = OneCycleLR(optimizer, max_lr=learning_rate, total_steps=num_iterations)
+            
+        score_transition_net = score_transition_net.to(device)
+        score_net = score_net.to(device)
         with Progress(
                 SpinnerColumn(spinner_name='moon'),
                 *Progress.get_default_columns(),
                 TimeElapsedColumn(),
                 transient=False,
             ) as progress:
-            task1 = progress.add_task("[red]Training whole dataset (lr: X) (loss=X)", total=num_iterations)
+            task1 = progress.add_task("[red]Training score_marginal (lr: X) (loss=X)", total=num_iterations)
             while not progress.finished:
                 for i in range(num_repeats):            
                     
@@ -943,7 +949,9 @@ class model(torch.nn.Module):
                     
                     # simulate trajectories from approximate diffusion bridge process backwards
                     with torch.no_grad():
-                        simulation_output = self.simulate_bridge_backwards(score_transition_net, initial_states_flatten, terminal_states_flatten, epsilon, num_samples, modify = True, full_score = False)            
+                        initial_states_flatten = initial_states_flatten.to(device)
+                        terminal_states_flatten = terminal_states_flatten.to(device)
+                        simulation_output = self.my_simulate_bridge_backwards(score_transition_net, initial_states_flatten, terminal_states_flatten, epsilon, num_samples, modify = True, full_score = True)            
                     trajectories = simulation_output['trajectories']
                     scaled_brownian = simulation_output['scaled_brownian']
 
@@ -958,6 +966,9 @@ class model(torch.nn.Module):
                         
                         # evaluate score network
                         traj_flatten = traj[:, 0:M, :].flatten(start_dim = 0, end_dim = 1) # size (N*M, d)
+                        
+                        timesteps_flatten = timesteps_flatten.to(device)
+                        traj_flatten = traj_flatten.to(device)
                         score = score_net(timesteps_flatten, traj_flatten) # size (N*M, d)
 
                         # compute loss function
@@ -979,8 +990,6 @@ class model(torch.nn.Module):
                         # iteration counter
                         current_loss = loss.item()
                         loss_values[iteration-1] = current_loss
-                        if (iteration == 1) or (iteration % 50 == 0):
-                            print("Optimization iteration:", iteration, "Loss:", current_loss)
                         iteration += 1
                         
                     cur_lr = optimizer.param_groups[-1]['lr']
