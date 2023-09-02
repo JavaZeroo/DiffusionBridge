@@ -7,6 +7,12 @@ import torch.nn.functional as F
 from DiffusionBridge.neuralnet import ScoreNetwork, FullScoreNetwork
 from DiffusionBridge.ema import ema_register, ema_update, ema_copy
 from DiffusionBridge.utils import normal_logpdf
+from torch.optim.lr_scheduler import CosineAnnealingLR, CosineAnnealingWarmRestarts, StepLR, OneCycleLR
+
+from rich.panel import Panel
+from rich.pretty import Pretty
+from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn
 
 def construct_time_discretization(terminal_time, num_steps):    
     stepsizes = (terminal_time / num_steps) * torch.ones(num_steps)
@@ -33,7 +39,13 @@ class model(torch.nn.Module):
         self.d = dimension
         self.T = terminal_time
         self.num_steps = num_steps
+        self.debug = False
         (self.time, self.stepsizes) = construct_time_discretization(terminal_time, num_steps)
+
+    def gen_drift(self, time, now_states, terminate_states):
+        dydt = 0
+        # dydt = terminate_states - now_states
+        return dydt
 
     def simulate_process(self, initial_states):
         """
@@ -72,7 +84,144 @@ class model(torch.nn.Module):
         output = {'trajectories' : trajectories, 'scaled_brownian' : scaled_brownian}
 
         return output
+    
+    def my_simulate_process(self, initial_states, terminate_states):
+        """
+        Simulate diffusion process using Euler-Maruyama discretization.
 
+        Parameters
+        ----------    
+        initial_states : initial condition of size (N, d)
+                        
+        Returns
+        -------   
+        output : dict containing 
+            trajectories : realizations of time-discretized process (N, M+1, d)
+            scaled_brownian : scaled brownian increments (N, M, d)
+        """
+        # initialize and preallocate
+        N = initial_states.shape[0]
+        M = self.num_steps
+        X = initial_states.clone() # size (N ,d)
+        trajectories = torch.zeros(N, M+1, self.d)
+        trajectories[:, 0, :] = X
+        scaled_brownian = torch.zeros(N, M, self.d)
+        
+        # simulate process forwards in time
+        for m in range(M):
+            stepsize = self.stepsizes[m]
+            t = self.time[m]
+            drift = (terminate_states - trajectories[:, m, :]) / (self.T - t)
+            euler = X + stepsize * drift
+            brownian = torch.sqrt(stepsize) * torch.randn(X.shape) # size (N x d)
+            X = euler + self.sigma * brownian
+            trajectories[:, m+1, :] = X
+            scaled_brownian[:, m, :] = - (self.invSigma / stepsize) * self.sigma * brownian 
+
+        # output
+        output = {'trajectories' : trajectories, 'scaled_brownian' : scaled_brownian}
+
+        return output
+
+    def my_simulate_bridge_backwards(self, score_net, initial_state, terminal_state, epsilon, num_samples = 1, modify = False, full_score = False, new_num_steps = None):
+        """
+        Simulate diffusion bridge process backwards using Euler-Maruyama discretization.
+
+        Parameters
+        ----------
+        score_net : neural network approximation of score function of transition density
+
+        initial_state : initial condition of size d or (N, d)
+
+        terminal_state : terminal condition of size d or (N, d)
+
+        epsilon : positive constant to enforce initial constraint 
+
+        num_samples : number of samples desired
+
+        modify : bool specifying if variance of transitions are modified 
+
+        full_score : bool specifying if the full score function is employed
+
+        new_num_steps : new number of time-discretization steps        
+                        
+        Returns
+        -------    
+        output : dict containing
+            trajectories : realizations of time-discretized process (N, M+1, d)
+            logdensity : log-density of simulated process (N)
+            scaled_brownian : scaled brownian increments (N, M, d)
+            score_evaluations : evaluations of score network (N, M, d)
+        """
+
+        # initialize and preallocate
+        if len(initial_state.shape) == 1:
+            X0 = initial_state.repeat(num_samples, 1) # size (N, d)
+            N = num_samples
+        else:
+            X0 = initial_state.clone() 
+            N = initial_state.shape[0]        
+        
+        if len(terminal_state.shape) == 1:
+            Z = terminal_state.repeat(num_samples, 1) # size (N, d)
+            N = num_samples
+        else:
+            Z = terminal_state.clone()
+            N = terminal_state.shape[0]        
+        
+        if new_num_steps is None:
+            M = self.num_steps
+            timesteps = self.time
+            stepsizes = self.stepsizes
+        else: 
+            M = new_num_steps
+            (timesteps, stepsizes) = construct_time_discretization(self.T, M)
+
+        trajectories = torch.zeros(N, M+1, self.d)
+        trajectories[:, M, :] = Z
+        logdensity = torch.zeros(N)
+        scaled_brownian = torch.zeros(N, M, self.d)
+        score_evaluations = torch.zeros(N, M, self.d)
+
+        # simulate process backwards in time
+        for m in range(M, 0, -1):
+            stepsize = stepsizes[m-1]
+            t = timesteps[m]
+            t_next = timesteps[m-1]
+            if full_score:
+                score = score_net(t.repeat((N,1)), Z, X0) # size (N, d)
+            else:
+                score = score_net(t.repeat((N,1)), Z) # size (N, d)
+            if self.debug:
+                print(score.shape)
+            score_evaluations[:, m-1, :] = score
+            drift = -self.gen_drift(t,Z, terminal_state) + self.Sigma * score + epsilon * (X0 - Z) / t
+            euler = Z + stepsize * drift
+            if (m > 1):
+                if modify:
+                    scaling = stepsize * t_next / t
+                else:
+                    scaling = stepsize
+                brownian = torch.sqrt(scaling) * torch.randn(Z.shape) # size (N x d)
+                Z = euler + self.sigma * brownian
+                logdensity += normal_logpdf(Z, euler, scaling * self.Sigma) 
+                trajectories[:, m-1, :] = Z
+                scaled_brownian[:, m-1, :] = - (self.invSigma / scaling) * self.sigma * brownian
+            else:
+                # terminal constraint
+                if modify:
+                    # fudging a little here because of singularity
+                    scaling = stepsize * 0.25 * stepsize / t
+                else:
+                    scaling = stepsize
+                trajectories[:, 0, :] = X0
+                scaled_brownian[:, 0, :] = - (self.invSigma / scaling) * (X0 - euler)
+
+        # output
+        output = {'trajectories' : trajectories, 'logdensity' : logdensity, 'scaled_brownian' : scaled_brownian, 'score_evaluations' : score_evaluations}
+        
+        return output
+    
     def simulate_bridge_backwards(self, score_net, initial_state, terminal_state, epsilon, num_samples = 1, modify = False, full_score = False, new_num_steps = None):
         """
         Simulate diffusion bridge process backwards using Euler-Maruyama discretization.
@@ -142,6 +291,8 @@ class model(torch.nn.Module):
                 score = score_net(t.repeat((N,1)), Z, X0) # size (N, d)
             else:
                 score = score_net(t.repeat((N,1)), Z) # size (N, d)
+            if self.debug:
+                print(score.shape)
             score_evaluations[:, m-1, :] = score
             drift = -self.f(t,Z) + self.Sigma * score + epsilon * (X0 - Z) / t
             euler = Z + stepsize * drift
@@ -580,6 +731,118 @@ class model(torch.nn.Module):
         
         return output
     
+    def my_learn_full_score_transition(self, simulate_initial_state, simulate_terminal_state, epsilon, minibatch, num_initial_per_batch, num_iterations, learning_rate, ema_momentum, scheduler=None, device='cpu'):
+        """
+        Learn full approximation of score transition using score matching.
+
+        Parameters
+        ----------
+        simulate_initial_state : function returning simulated initial conditions
+
+        simulate_terminal_state : function returning simulated terminal conditions
+
+        epsilon : positive constant to enforce initial constraint 
+
+        minibatch : number of mini-batch samples desired
+
+        num_initial_per_batch : number of initial states per batch
+
+        num_iterations : number of optimization iterations (divisible by num_batches)
+
+        learning_rate : learning rate of Adam optimizer
+
+        ema_momentum : momentum parameter of exponential moving average update
+                        
+        Returns
+        -------
+        output : dict containing    
+            net : neural network approximation of full score function of transition density
+            loss : value of loss function during learning
+        """
+
+        d = self.d
+        M = self.num_steps
+        N = minibatch * num_initial_per_batch
+        timesteps = self.time[1:(M+1)].reshape((1,M,1)).repeat((N,1,1)) # size (N, M, 1)
+        timesteps_flatten = timesteps.flatten(start_dim = 0, end_dim = 1) # size (N*M, 1)        
+        loss_values = torch.zeros(num_iterations)
+
+        # create score network
+        score_net = FullScoreNetwork(dimension = self.d).to(device)
+        score_net.train()
+        ema_parameters = ema_register(score_net)
+
+        # optimization
+        optimizer = torch.optim.Adam(score_net.parameters(), lr = learning_rate)
+        
+        if scheduler == 'cos':
+            scheduler = OneCycleLR(optimizer, max_lr=learning_rate, total_steps=num_iterations)
+
+        with Progress(
+                SpinnerColumn(spinner_name='moon'),
+                *Progress.get_default_columns(),
+                TimeElapsedColumn(),
+                transient=False,
+            ) as progress:
+            task1 = progress.add_task("[red]Training whole dataset (lr: X) (loss=X)", total=num_iterations)
+            while not progress.finished:
+                for i in range(num_iterations):
+                    # simulate initial states
+                    initial_states = simulate_initial_state(num_initial_per_batch).repeat((minibatch,1)) # size (N, d)
+                    initial_states_repeated = initial_states.reshape((N,1,d)).repeat((1,M,1)) # size (N, M, d)
+                    initial_states_flatten = initial_states_repeated.flatten(start_dim = 0, end_dim = 1) # size (N*M, d)
+
+                    terminal_states = simulate_terminal_state(num_initial_per_batch).repeat((minibatch,1)) # size (N, d)
+                    # terminal_states_repeated = terminal_states.reshape((N,1,d)).repeat((1,M,1)) # size (N, M, d)
+                    # terminal_states_flatten = terminal_states_repeated.flatten(start_dim = 0, end_dim = 1) # size (N*M, d)
+                    
+                    # simulate trajectories from diffusion process
+                    simulation_output = self.my_simulate_process(initial_states, terminal_states)
+                    traj = simulation_output['trajectories'] # size (N, M+1, d)
+                    scaled = simulation_output['scaled_brownian']
+
+                    # evaluate gradient function
+                    grad = self.gradient_transition(traj, scaled, epsilon) # size (N, M, d)
+                    grad_flatten = grad.flatten(start_dim = 0, end_dim = 1) # size (N*M, d)
+                        
+                    # evaluate score network
+                    traj_flatten = traj[:, 1:(M+1), :].flatten(start_dim = 0, end_dim = 1) # size (N*M, d)
+                    timesteps_flatten = timesteps_flatten.to(device)
+                    traj_flatten = traj_flatten.to(device)
+                    initial_states_flatten = initial_states_flatten.to(device)
+                    grad_flatten = grad_flatten.to(device)
+                    score = score_net(timesteps_flatten, traj_flatten, initial_states_flatten) # size (N*M, d)
+
+                    # compute loss function
+                    loss = F.mse_loss(score, grad_flatten) # need to extend this for non-uniform stepsizes
+                    
+                    # backpropagation
+                    loss.backward()
+        
+                    # optimization step and zero gradient
+                    optimizer.step()
+                    optimizer.zero_grad()
+                    if scheduler is not None:
+                        scheduler.step()
+                    # update parameters using exponential moving average
+                    ema_update(ema_parameters, score_net, ema_momentum)
+
+                    # iteration counter
+                    current_loss = loss.item()
+                    loss_values[i] = current_loss
+                    # if (i == 0) or ((i+1) % 50 == 0):
+                    #     print("Optimization iteration:", i+1, "Loss:", current_loss)
+                    cur_lr = optimizer.param_groups[-1]['lr']
+                    progress.update(task1, advance=1, description="[red]Training whole dataset (lr: %2.5f) (loss=%2.5f)" % (cur_lr, current_loss))
+
+        # use exponential moving average parameters in score network
+        ema_copy(ema_parameters, score_net)           
+
+        # output 
+        output = {'net' : score_net, 'loss' : loss_values}
+        
+        return output
+    
     def gradient_marginal(self, trajectories, scaled_brownian, epsilon):
         """
         Evaluate gradient function needed in score matching to learn score of marginal (diffusion bridge) density.
@@ -612,6 +875,125 @@ class model(torch.nn.Module):
 
         return grad
 
+    def my_learn_score_marginal(self, score_transition_net, simulate_initial_state, simulate_terminal_state, epsilon, minibatch, num_initial_per_batch, num_iterations, learning_rate, ema_momentum, scheduler=None):
+        """
+        Learn approximation of score of marginal (diffusion bridge) density using score matching.
+
+        Parameters
+        ----------
+        score_transition_net : neural network approximation of score function of transition density
+
+        initial_state : initial condition of size d
+
+        terminal_state : terminal condition of size d
+
+        epsilon : positive constant to enforce initial constraint 
+
+        minibatch : number of mini-batch samples desired
+
+        num_iterations : number of optimization iterations (divisible by num_batches)
+
+        learning_rate : learning rate of Adam optimizer
+
+        ema_momentum : momentum parameter of exponential moving average update
+                        
+        Returns
+        -------    
+        score_marginal_net : neural network approximation of score function of marginal (diffusion bridge) density
+
+        loss_values : value of loss function during learning
+        """
+
+        M = self.num_steps
+        N = minibatch
+        timesteps = self.time[0:M].reshape((1,M,1)).repeat((N,1,1)) # size (N, M, 1)
+        timesteps_flatten = timesteps.flatten(start_dim = 0, end_dim = 1) # size (N*M, 1)
+        loss_values = torch.zeros(num_iterations)
+
+        # create score network
+        score_net = ScoreNetwork(dimension = self.d)
+        ema_parameters = ema_register(score_net)
+
+        # optimization
+        optimizer = torch.optim.Adam(score_net.parameters(), lr = learning_rate)
+        num_batches = 10 
+        num_samples = num_batches * N
+        num_repeats = int(num_iterations / num_batches)
+        iteration = 1
+        if scheduler == 'cos':
+            scheduler = OneCycleLR(optimizer, max_lr=learning_rate, total_steps=num_iterations)
+        with Progress(
+                SpinnerColumn(spinner_name='moon'),
+                *Progress.get_default_columns(),
+                TimeElapsedColumn(),
+                transient=False,
+            ) as progress:
+            task1 = progress.add_task("[red]Training whole dataset (lr: X) (loss=X)", total=num_iterations)
+            while not progress.finished:
+                for i in range(num_repeats):            
+                    
+                    # simulate initial states
+                    initial_states = simulate_initial_state(num_initial_per_batch).repeat((minibatch,1)) # size (N, d)
+                    initial_states_repeated = initial_states.reshape((N,1,d)).repeat((1,M,1)) # size (N, M, d)
+                    initial_states_flatten = initial_states_repeated.flatten(start_dim = 0, end_dim = 1) # size (N*M, d)
+
+                    terminal_states = simulate_terminal_state(num_initial_per_batch).repeat((minibatch,1)) # size (N, d)
+                    terminal_states_repeated = terminal_states.reshape((N,1,d)).repeat((1,M,1)) # size (N, M, d)
+                    terminal_states_flatten = terminal_states_repeated.flatten(start_dim = 0, end_dim = 1) # size (N*M, d)
+                    
+                    # simulate trajectories from approximate diffusion bridge process backwards
+                    with torch.no_grad():
+                        simulation_output = self.simulate_bridge_backwards(score_transition_net, initial_states_flatten, terminal_states_flatten, epsilon, num_samples, modify = True, full_score = False)            
+                    trajectories = simulation_output['trajectories']
+                    scaled_brownian = simulation_output['scaled_brownian']
+
+                    for j in range(num_batches):
+                        # get minibatch of trajectories
+                        traj = trajectories[(j * N):((j+1) * N), :, :] # size (N, M+1, d)
+                        scaled = scaled_brownian[(j * N):((j+1) * N), :, :]
+
+                        # evaluate gradient function
+                        grad = self.gradient_marginal(traj, scaled, epsilon) # size (N, M, d)
+                        grad_flatten = grad.flatten(start_dim = 0, end_dim = 1) # size (N*M, d)
+                        
+                        # evaluate score network
+                        traj_flatten = traj[:, 0:M, :].flatten(start_dim = 0, end_dim = 1) # size (N*M, d)
+                        score = score_net(timesteps_flatten, traj_flatten) # size (N*M, d)
+
+                        # compute loss function
+                        loss = F.mse_loss(score, grad_flatten) # need to extend this for non-uniform stepsizes
+                    
+                        # backpropagation
+                        loss.backward()
+        
+                        # optimization step and zero gradient
+                        optimizer.step()
+                        optimizer.zero_grad()
+
+                        if scheduler is not None:
+                            scheduler.step()
+
+                        # update parameters using exponential moving average
+                        ema_update(ema_parameters, score_net, ema_momentum)
+
+                        # iteration counter
+                        current_loss = loss.item()
+                        loss_values[iteration-1] = current_loss
+                        if (iteration == 1) or (iteration % 50 == 0):
+                            print("Optimization iteration:", iteration, "Loss:", current_loss)
+                        iteration += 1
+                        
+                    cur_lr = optimizer.param_groups[-1]['lr']
+                    progress.update(task1, advance=1, description="[red]Training whole dataset (lr: %2.5f) (loss=%2.5f)" % (cur_lr, current_loss))
+
+        # use exponential moving average parameters in score network
+        ema_copy(ema_parameters, score_net)           
+
+        # output 
+        output = {'net' : score_net, 'loss' : loss_values}
+
+        return output
+    
     def learn_score_marginal(self, score_transition_net, initial_state, terminal_state, epsilon, minibatch, num_iterations, learning_rate, ema_momentum):
         """
         Learn approximation of score of marginal (diffusion bridge) density using score matching.
@@ -705,3 +1087,52 @@ class model(torch.nn.Module):
 
         return output
         
+    def load_checkpoint_score(self, filename):
+        """
+        Load checkpoint of score network.
+
+        Parameters
+        ----------
+        filename : filename of checkpoint
+                        
+        Returns
+        -------    
+        net : neural network approximation of score function of transition density
+        """
+
+        # load checkpoint
+        checkpoint = torch.load(filename)
+
+        # create score network
+        score_net = FullScoreNetwork(dimension = self.d)
+        score_net.load_state_dict(checkpoint)
+
+        # output
+        output = {'net' : score_net}
+
+        return output
+    
+    def load_checkpoint_marginal(self, filename):
+        """
+        Load checkpoint of score network.
+
+        Parameters
+        ----------
+        filename : filename of checkpoint
+                        
+        Returns
+        -------    
+        net : neural network approximation of score function of marginal (diffusion bridge) density
+        """
+
+        # load checkpoint
+        checkpoint = torch.load(filename)
+
+        # create score network
+        score_net = ScoreNetwork(dimension = self.d)
+        score_net.load_state_dict(checkpoint)
+
+        # output
+        output = {'net' : score_net}
+
+        return output
