@@ -915,6 +915,7 @@ class model(torch.nn.Module):
 
         # create score network
         score_net = ScoreNetwork(dimension = self.d)
+        score_net = score_net.to(device)
         ema_parameters = ema_register(score_net)
 
         # optimization
@@ -927,7 +928,6 @@ class model(torch.nn.Module):
             scheduler = OneCycleLR(optimizer, max_lr=learning_rate, total_steps=num_iterations)
             
         score_transition_net = score_transition_net.to(device)
-        score_net = score_net.to(device)
         with Progress(
                 SpinnerColumn(spinner_name='moon'),
                 *Progress.get_default_columns(),
@@ -969,6 +969,7 @@ class model(torch.nn.Module):
                         
                         timesteps_flatten = timesteps_flatten.to(device)
                         traj_flatten = traj_flatten.to(device)
+                        grad_flatten = grad_flatten.to(device)
                         score = score_net(timesteps_flatten, traj_flatten) # size (N*M, d)
 
                         # compute loss function
