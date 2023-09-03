@@ -34,17 +34,18 @@ def main():
     parser.add_argument('--lr', type=float, default=1e-2)
     # parser.add_argument('--iter_nums', type=int, default=1)
     # parser.add_argument('--epoch_nums', type=int, default=3)
-    parser.add_argument('-bt','--batch_size_tran', type=int, default=5000)
-    parser.add_argument('-bm','--batch_size_marg', type=int, default=2000)
-    parser.add_argument('-it','--iters_tran', type=int, default=500)
-    parser.add_argument('-im','--iters_marg', type=int, default=500)
+    parser.add_argument('-bt', '--batch_size_tran', type=int, default=5000)
+    parser.add_argument('-bm', '--batch_size_marg', type=int, default=2000)
+    parser.add_argument('-it', '--iters_tran', type=int, default=500)
+    parser.add_argument('-im', '--iters_marg', type=int, default=500)
+    parser.add_argument('--device', type=str)
     # parser.add_argument('-n','--normalize', action='store_true')
     # parser.add_argument('--num_workers', type=int, default=20)
 
     parser.add_argument('--debug', action='store_true')
 
     args = parser.parse_args()
-    
+
     seed = args.seed
     torch.manual_seed(seed)
     if torch.cuda.is_available():
@@ -52,20 +53,25 @@ def main():
     np.random.seed(seed)
 
     experiment_name = args.task
-    
+
     if args.debug:
-        log_dir = Path('experiments') / 'debug' / 'train' / time.strftime("%Y-%m-%d/%H_%M_%S/")  
+        log_dir = Path('experiments') / 'debug' / 'train' / \
+            time.strftime("%Y-%m-%d/%H_%M_%S/")
     else:
-        log_dir = Path('experiments') / experiment_name / 'train' / time.strftime("%Y-%m-%d/%H_%M_%S/")  
-    
+        log_dir = Path('experiments') / experiment_name / \
+            'train' / time.strftime("%Y-%m-%d/%H_%M_%S/")
+
     log_dir.mkdir(parents=True, exist_ok=True)
     args.log_dir = log_dir
 
-    args.checkpoint_score = Path(args.checkpoint_score) if args.checkpoint_score is not None else None
-    args.checkpoint_marginal = Path(args.checkpoint_marginal) if args.checkpoint_marginal is not None else None
+    args.checkpoint_score = Path(
+        args.checkpoint_score) if args.checkpoint_score is not None else None
+    args.checkpoint_marginal = Path(
+        args.checkpoint_marginal) if args.checkpoint_marginal is not None else None
 
-    args.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    args.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') if args.device is None else args.device
     main_worker(args)
+
 
 def main_worker(args):
 
@@ -92,7 +98,7 @@ def main_worker(args):
 
     source_dist = gaussian()
     target_dist = two_gaussian()
-
+    ############################ Model ########################################
     epsilon = 1e-3
     ema_momentum = 0.99
     if args.checkpoint_score is None:
@@ -100,8 +106,10 @@ def main_worker(args):
             source_dist, target_dist, epsilon, 1, args.batch_size_tran, args.iters_tran, args.lr, ema_momentum, scheduler=args.scheduler, device=args.device)
     else:
         output = diffusion.load_checkpoint_score(args.checkpoint_score)
-        console.log(f"Loaded score checkpoint from {Path.absolute(args.checkpoint_score)}")
+        console.log(
+            f"Loaded score checkpoint from {Path.absolute(args.checkpoint_score)}")
     score_transition_net = output['net']
+    console.log(f"Transition Model {score_transition_net.__class__.__name__} Parameters: {int(sum(p.numel() for p in score_transition_net.parameters())/1e6)}M")
     torch.save(score_transition_net.state_dict(),
                args.log_dir / 'score_transition_net.pt')
 
@@ -110,36 +118,39 @@ def main_worker(args):
                                                    args.batch_size_marg, args.iters_marg, args.lr, ema_momentum, scheduler=args.scheduler, device=args.device)
     else:
         output = diffusion.load_checkpoint_marginal(args.checkpoint_marginal)
-        console.log(f"Loaded marginal checkpoint from {Path.absolute(args.checkpoint_marginal)}")
+        console.log(
+            f"Loaded marginal checkpoint from {Path.absolute(args.checkpoint_marginal)}")
     score_marginal_net = output['net']
+    console.log(f"Marginal Model {score_marginal_net.__class__.__name__} Parameters: {int(sum(p.numel() for p in score_marginal_net.parameters())/1e6)}M")
     torch.save(score_marginal_net.state_dict(),
                args.log_dir / 'score_marginal_net.pt')
-        
 
     score_transition_net = score_transition_net.cpu()
     score_marginal_net = score_marginal_net.cpu()
 
+    ############################# Test ########################################
     num_test_samples = 500
     source_sample = source_dist(num_test_samples)
     target_sample = target_dist(num_test_samples)
     out = diffusion.my_simulate_bridge_backwards(
         score_transition_net, source_sample, target_sample, 1e-3, modify=True, full_score=True)
 
+    console.rule("Results")
+
     fig, _ = plot_bridge(diffusion.time.numpy(), out['trajectories'][:, :, 0].detach(
     ).numpy().T, source_sample.numpy(), target_sample.numpy(), show_rate=1, show_gt=True)
     fig.savefig(args.log_dir / 'bridge_backward.jpg')
 
-    out = diffusion.simulate_bridge_forwards(score_transition_net, score_marginal_net, source_sample, target_sample, epsilon, num_samples = 1, modify = False, full_score = True, new_num_steps = None)
+    out = diffusion.simulate_bridge_forwards(score_transition_net, score_marginal_net, source_sample,
+                                             target_sample, epsilon, num_samples=1, modify=False, full_score=True, new_num_steps=None)
     fig, _ = plot_bridge(diffusion.time.numpy(), out['trajectories'][:, :, 0].detach(
     ).numpy().T, source_sample.numpy(), target_sample.numpy(), show_rate=1, show_gt=True)
     fig.savefig(args.log_dir / 'bridge_forward.jpg')
-
 
     out = diffusion.my_simulate_process(source_sample, target_sample)
     fig, _ = plot_bridge(diffusion.time.numpy(), out['trajectories'][:, :, 0].detach(
     ).numpy().T, source_sample.numpy(), target_sample.numpy(), show_rate=1, show_gt=False)
     fig.savefig(args.log_dir / 'bridge_real.jpg')
-
 
 
 if __name__ == '__main__':
