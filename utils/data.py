@@ -1,5 +1,11 @@
 import torch
 
+# class myDataset(torch.utils.data.Dataset):
+#     def __init__(self, data):
+#         self.data = data
+#         pass
+
+#     def __
 
 class gaussian:
     def __init__(self, mu=0, sigma=1) -> None:

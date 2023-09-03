@@ -419,6 +419,101 @@ class model(torch.nn.Module):
         output = {'trajectories': trajectories, 'logdensity': logdensity}
 
         return output
+    
+    def simulate_bridge_forwards(self, score_transition_net, score_marginal_net, initial_state, terminal_state, epsilon, num_samples = 1, modify = False, full_score = False, new_num_steps = None):
+        """
+        Simulate diffusion bridge process fowards using Euler-Maruyama discretization.
+
+        Parameters
+        ----------
+        score_transition_net : neural network approximation of score function of transition density
+
+        score_marginal_net : neural network approximation of score function of marginal (diffusion bridge) density
+
+        initial_state : initial condition of size d or (N, d)
+
+        terminal_state : terminal condition of size d or (N, d)
+
+        epsilon : positive constant to enforce initial constraint 
+
+        num_samples : number of samples desired
+
+        modify : bool specifying if variance of transitions are modified 
+
+        full_score : bool specifying if the full score function is employed
+
+        new_num_steps : new number of time-discretization steps        
+
+        Returns
+        -------   
+        output : dict containing  
+            trajectories : realizations of time-discretized process (N, M+1, d)
+            logdensity : log-density of simulated process (N)
+        """
+
+        # initialize and preallocate
+        T = self.T
+        if len(initial_state.shape) == 1:
+            X0 = initial_state.repeat(num_samples, 1) # size (N, d)
+            X = initial_state.repeat(num_samples, 1) # size (N, d)
+            N = num_samples
+        else:
+            X0 = initial_state.clone()
+            X = initial_state.clone() 
+            N = initial_state.shape[0]        
+        
+        if len(terminal_state.shape) == 1:
+            XT = terminal_state.repeat(num_samples, 1) # size (N, d)
+            N = num_samples
+        else:
+            XT = terminal_state.clone()
+            N = terminal_state.shape[0]
+        
+        if new_num_steps is None:
+            M = self.num_steps
+            timesteps = self.time
+            stepsizes = self.stepsizes
+        else: 
+            M = new_num_steps
+            (timesteps, stepsizes) = construct_time_discretization(T, M)
+
+        trajectories = torch.zeros(N, M+1, self.d)
+        trajectories[:, 0, :] = X
+        logdensity = torch.zeros(N)
+        
+        # simulate process forwards in time
+        for m in range(M-1):
+            stepsize = stepsizes[m]
+            if m == 0:
+                # fudging a little here because of singularity                
+                t = timesteps[m] + 0.5 * stepsize 
+            else: 
+                t = timesteps[m]
+            t_next = timesteps[m+1]
+            if full_score:
+                score_marginal = score_marginal_net(t.repeat(N,1), X) # size (N, d)
+                score_transition = score_transition_net(t.repeat(N,1), X, X0) # size (N, d)
+            else:    
+                score_marginal = score_marginal_net(t.repeat(N,1), X) # size (N, d)
+                score_transition = score_transition_net(t.repeat(N,1), X) # size (N, d)
+            drift = self.f(t, X) + self.Sigma * (score_marginal - score_transition) + epsilon * ((XT - X) / (T - t) - (X0 - X) / t)            
+            euler = X + stepsize * drift
+            if modify:
+                scaling = stepsize * (T - t_next) / (T - t)
+            else:
+                scaling = stepsize            
+            brownian = torch.sqrt(scaling) * torch.randn(X.shape) # size (N x d)
+            X = euler + self.sigma * brownian
+            logdensity += normal_logpdf(X, euler, scaling * self.Sigma)
+            trajectories[:, m+1, :] = X
+
+        # terminal constraint
+        trajectories[:, M, :] = XT
+
+        # output
+        output = {'trajectories': trajectories, 'logdensity': logdensity}
+
+        return output
 
     def simulate_proposal_bridge(self, drift, initial_state, terminal_state, num_samples, modify = False, new_num_steps = None):
         """

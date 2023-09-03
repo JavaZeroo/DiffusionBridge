@@ -129,10 +129,17 @@ def main_worker(args):
     ).numpy().T, source_sample.numpy(), target_sample.numpy(), show_rate=1, show_gt=True)
     fig.savefig(args.log_dir / 'bridge_backward.jpg')
 
+    out = diffusion.simulate_bridge_forwards(score_transition_net, score_marginal_net, source_sample, target_sample, epsilon, num_samples = 1, modify = False, full_score = True, new_num_steps = None)
+    fig, _ = plot_bridge(diffusion.time.numpy(), out['trajectories'][:, :, 0].detach(
+    ).numpy().T, source_sample.numpy(), target_sample.numpy(), show_rate=1, show_gt=True)
+    fig.savefig(args.log_dir / 'bridge_forward.jpg')
+
+
     out = diffusion.my_simulate_process(source_sample, target_sample)
     fig, _ = plot_bridge(diffusion.time.numpy(), out['trajectories'][:, :, 0].detach(
     ).numpy().T, source_sample.numpy(), target_sample.numpy(), show_rate=1, show_gt=False)
     fig.savefig(args.log_dir / 'bridge_real.jpg')
+
 
 
 if __name__ == '__main__':
