@@ -31,6 +31,7 @@ def main():
     parser.add_argument('--checkpoint_score', type=str, default=None)
     parser.add_argument('--checkpoint_marginal', type=str, default=None)
     parser.add_argument('--scheduler', type=str, default=None)
+    parser.add_argument('--num_workers', type=int, default=0)
     parser.add_argument('--lr', type=float, default=1e-2)
     # parser.add_argument('--iter_nums', type=int, default=1)
     # parser.add_argument('--epoch_nums', type=int, default=3)
@@ -109,19 +110,19 @@ def main_worker(args):
         console.log(
             f"Loaded score checkpoint from {Path.absolute(args.checkpoint_score)}")
     score_transition_net = output['net']
-    console.log(f"Transition Model {score_transition_net.__class__.__name__} Parameters: {int(sum(p.numel() for p in score_transition_net.parameters())/1e6)}M")
+    console.log(f"Transition Model {score_transition_net.__class__.__name__} Parameters: {float(sum(p.numel() for p in score_transition_net.parameters())/1e6)}M")
     torch.save(score_transition_net.state_dict(),
                args.log_dir / 'score_transition_net.pt')
 
     if args.checkpoint_marginal is None:
         output = diffusion.my_learn_score_marginal(score_transition_net, source_dist, target_dist, epsilon, 1,
-                                                   args.batch_size_marg, args.iters_marg, args.lr, ema_momentum, scheduler=args.scheduler, device=args.device)
+                                                   args.batch_size_marg, args.iters_marg, args.lr, ema_momentum, num_workers=args.num_workers, scheduler=args.scheduler, device=args.device)
     else:
         output = diffusion.load_checkpoint_marginal(args.checkpoint_marginal)
         console.log(
             f"Loaded marginal checkpoint from {Path.absolute(args.checkpoint_marginal)}")
     score_marginal_net = output['net']
-    console.log(f"Marginal Model {score_marginal_net.__class__.__name__} Parameters: {int(sum(p.numel() for p in score_marginal_net.parameters())/1e6)}M")
+    console.log(f"Marginal Model {score_marginal_net.__class__.__name__} Parameters: {float(sum(p.numel() for p in score_marginal_net.parameters())/1e6)}M")
     torch.save(score_marginal_net.state_dict(),
                args.log_dir / 'score_marginal_net.pt')
 

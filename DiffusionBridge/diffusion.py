@@ -980,7 +980,7 @@ class model(torch.nn.Module):
         return grad
 
     
-    def my_learn_score_marginal(self, score_transition_net, simulate_initial_state, simulate_terminal_state, epsilon, minibatch, num_initial_per_batch, num_iterations, learning_rate, ema_momentum, device='cpu', scheduler=None):
+    def my_learn_score_marginal(self, score_transition_net, simulate_initial_state, simulate_terminal_state, epsilon, minibatch, num_initial_per_batch, num_iterations, learning_rate, ema_momentum, num_workers=0, device='cpu', scheduler=None):
         """
         Learn approximation of score of marginal (diffusion bridge) density using score matching.
 
@@ -1032,9 +1032,10 @@ class model(torch.nn.Module):
         score_transition_net = score_transition_net.to(device)
         
         ds = bridgeBackwardsDataset(self, score_transition_net ,simulate_initial_state ,simulate_terminal_state, num_repeats, num_initial_per_batch, minibatch, device, epsilon, num_samples, N, d, M)
-        dl = DataLoader(ds, batch_size=1, num_workers=20)
+        dl = DataLoader(ds, batch_size=1, num_workers=num_workers)
         for i in ds[0]:
             print(i.shape)
+        iter_nums = 0
         with Progress(
                 SpinnerColumn(spinner_name='moon'),
                 *Progress.get_default_columns(),
@@ -1086,6 +1087,10 @@ class model(torch.nn.Module):
                         
                     cur_lr = optimizer.param_groups[-1]['lr']
                     progress.update(task1, advance=1, description="[red]Training whole dataset (lr: %2.5f) (loss=%2.5f)" % (cur_lr, current_loss))
+                    iter_nums += 1
+                    if iter_nums % 10 == 0:
+                        print("Optimization iteration:", iter_nums, "Loss:", current_loss)
+                        torch.save(score_net.state_dict(), f'temp/score_marginal_net_{iter_nums}.pth')
 
         # use exponential moving average parameters in score network
         ema_copy(ema_parameters, score_net)           
