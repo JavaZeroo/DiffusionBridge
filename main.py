@@ -70,7 +70,8 @@ def main():
     args.checkpoint_marginal = Path(
         args.checkpoint_marginal) if args.checkpoint_marginal is not None else None
 
-    args.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') if args.device is None else args.device
+    args.device = torch.device('cuda' if torch.cuda.is_available(
+    ) else 'cpu') if args.device is None else args.device
     main_worker(args)
 
 
@@ -110,7 +111,8 @@ def main_worker(args):
         console.log(
             f"Loaded score checkpoint from {Path.absolute(args.checkpoint_score)}")
     score_transition_net = output['net']
-    console.log(f"Transition Model {score_transition_net.__class__.__name__} Parameters: {float(sum(p.numel() for p in score_transition_net.parameters())/1e6)}M")
+    console.log(
+        f"Transition Model {score_transition_net.__class__.__name__} Parameters: {float(sum(p.numel() for p in score_transition_net.parameters())/1e6)}M")
     torch.save(score_transition_net.state_dict(),
                args.log_dir / 'score_transition_net.pt')
 
@@ -122,7 +124,8 @@ def main_worker(args):
         console.log(
             f"Loaded marginal checkpoint from {Path.absolute(args.checkpoint_marginal)}")
     score_marginal_net = output['net']
-    console.log(f"Marginal Model {score_marginal_net.__class__.__name__} Parameters: {float(sum(p.numel() for p in score_marginal_net.parameters())/1e6)}M")
+    console.log(
+        f"Marginal Model {score_marginal_net.__class__.__name__} Parameters: {float(sum(p.numel() for p in score_marginal_net.parameters())/1e6)}M")
     torch.save(score_marginal_net.state_dict(),
                args.log_dir / 'score_marginal_net.pt')
 
