@@ -41,3 +41,14 @@ def plot_bridge(ts, bridge, source_sample, target_sample, show_rate=1.0, show_gt
     ax.legend()
     fig.show()
     return fig, ax
+
+def plot_t(traj):
+    fig, ax = plt.subplots(1, 1, figsize=(15, 8))
+
+    ax.scatter(*traj[:, 0, :].T, c='r', alpha=0.8, label='Source', s=10)
+    ax.scatter(*traj[:, -1, :].T, c='b', alpha=0.8, label='Target', s=10)
+    for path in traj:
+        ax.plot(*path[:, :].T, c='grey', alpha=0.2)
+    
+    fig.legend()
+    return fig, ax

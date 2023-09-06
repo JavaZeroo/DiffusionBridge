@@ -41,13 +41,13 @@ class bridgeBackwardsDataset(torch.utils.data.Dataset):
         
         # simulate trajectories from approximate diffusion bridge process backwards
         with torch.no_grad():
-            simulation_output = self.diffusion.my_simulate_bridge_backwards(self.score_transition_net, initial_states_flatten, terminal_states_flatten, self.epsilon, self.num_samples, modify = True, full_score = True)            
+            simulation_output = self.diffusion.my_simulate_bridge_backwards(self.score_transition_net, initial_states_flatten, terminal_states_flatten, self.epsilon, self.num_samples, modify = True, full_score = True)
         trajectories = simulation_output['trajectories']
         scaled_brownian = simulation_output['scaled_brownian']
         
         return trajectories, scaled_brownian
 
-class gaussian:
+class Gaussian:
     def __init__(self, mu=0, sigma=1) -> None:
         self.mu = mu
         self.sigma = sigma
@@ -56,7 +56,7 @@ class gaussian:
     def __call__(self, num_samples):
         return torch.normal(self.mu, self.sigma, size=(num_samples,1))
 
-class two_gaussian:
+class twoGaussian:
     def __init__(self, mu1=-8, mu2=8,sigma=1) -> None:
         self.mu1 = mu1
         self.mu2 = mu2
@@ -68,3 +68,66 @@ class two_gaussian:
         samples1 = torch.normal(self.mu1, self.sigma, size=(half_num_samples,1))
         samples2 = torch.normal(self.mu2, self.sigma, size=(num_samples-half_num_samples,1))
         return torch.concatenate([samples1, samples2])
+    
+    
+    
+class DiagonalMatching:
+
+    def __init__(self, ):
+        pass
+        
+
+    def sample(self, n_samples):
+        n = n_samples // 2 + 1
+
+        left_square = torch.stack([
+            torch.rand(size=(n,)) * 0.2 - 1.2,
+            torch.linspace(-0.1, 0.5, n)
+        ], dim=1) * torch.tensor([4.0, 4.0]) + torch.tensor([-5.0, 3.0])
+
+        right_square = torch.stack([
+            torch.rand(size=(n,)) * 0.2 + 1.0,
+            torch.linspace(-0.1, 0.5, n)
+        ], dim=1) * torch.tensor([4.0, 4.0]) + torch.tensor([5.0, 3.0])
+
+        top_square = torch.stack([
+            torch.linspace(-0.3, 0.3, n),
+            torch.rand(size=(n,)) * 0.2 + 0.8
+        ], dim=1) * torch.tensor([4.0, 2.0]) + torch.tensor([0.0, 3.0])
+
+        bottom_square = torch.stack([
+            torch.linspace(-0.3, 0.3, n),
+            torch.rand(size=(n,)) * 0.2 - 1.5
+        ], dim=1) * torch.tensor([4.0, 2.0]) + torch.tensor([0.0, -3.0])
+
+        # rand_shuffling = torch.randperm(n_samples)
+
+        initial = torch.cat([left_square, top_square], dim=0)[:n_samples]
+        final = torch.cat([right_square, bottom_square], dim=0)[:n_samples]
+
+        return {
+            "initial": initial,
+            "final": final
+        }
+
+class sourceDiagonalMatching(DiagonalMatching):
+    
+    def __init__(self, ):
+        super().__init__()
+        
+    def __call__(self, num_samples):
+        return self.sample(num_samples)['initial']
+    
+class targetDiagonalMatching(DiagonalMatching):
+    
+    def __init__(self, ):
+        super().__init__()
+        
+    def __call__(self, num_samples):
+        return self.sample(num_samples)['final']
+    
+    
+if __name__ == "__main__":
+    test = sourceDiagonalMatching()
+    print(test(10).shape)
+    pass
