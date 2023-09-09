@@ -1,4 +1,6 @@
+from typing import Any
 import torch
+from sklearn.datasets import make_s_curve, make_circles, make_moons
 
 class marginalDataset(torch.utils.data.Dataset):
     def __init__(self, data, num_batches) -> None:
@@ -47,8 +49,19 @@ class bridgeBackwardsDataset(torch.utils.data.Dataset):
         
         return trajectories, scaled_brownian
 
-class Gaussian:
+class oneDimension:
+    def __init__(self,) -> None:
+        self.d = 1
+        pass
+    
+class twoDimension:
+    def __init__(self,) -> None:
+        self.d = 2
+        pass
+
+class Gaussian(oneDimension):
     def __init__(self, mu=0, sigma=1) -> None:
+        super().__init__()
         self.mu = mu
         self.sigma = sigma
         pass
@@ -56,8 +69,20 @@ class Gaussian:
     def __call__(self, num_samples):
         return torch.normal(self.mu, self.sigma, size=(num_samples,1))
 
-class twoGaussian:
+class Gaussian2d(twoDimension):
+    def __init__(self, mu=0, sigma=1) -> None:
+        super().__init__()
+        self.mu = mu
+        self.sigma = sigma
+        pass
+    
+    def __call__(self, num_samples):
+        return torch.normal(self.mu, self.sigma, size=(num_samples,2))
+
+
+class twoGaussian(oneDimension):
     def __init__(self, mu1=-8, mu2=8,sigma=1) -> None:
+        super().__init__()
         self.mu1 = mu1
         self.mu2 = mu2
         self.sigma = sigma
@@ -69,11 +94,56 @@ class twoGaussian:
         samples2 = torch.normal(self.mu2, self.sigma, size=(num_samples-half_num_samples,1))
         return torch.concatenate([samples1, samples2])
     
+
+class fourGaussian2d(twoDimension):
+    def __init__(self, m=8) -> None:
+        super().__init__()
+        self.mus = [(m, m), (m, -m), (-m, m), (-m, -m)]
     
+    def __call__(self, num_samples):
+        samples = int(num_samples / 4)
+        cov_matrix = torch.tensor([[1.0, 0.0], [0.0, 1.0]])
+
+        L = torch.linalg.cholesky(cov_matrix)
+
+        target_dist_list = []
+
+        # 循环遍历每一个均值向量，并生成相应的多元正态分布样本集
+        for mu in self.mus:
+            # 生成均值为0，标准差为1的正态分布样本
+            Z = torch.normal(mean=0.0, std=1.0, size=(samples, 2))
+            
+            # 使用线性变换得到具有给定均值和协方差矩阵的多元正态分布样本
+            X = torch.tensor(mu) + Z.matmul(L.T)
+            
+            # 将生成的样本集添加到列表中
+            target_dist_list.append(X)
+        return torch.concatenate(target_dist_list)
+
+class S(twoDimension):
+    def __init__(self, scale=3) -> None:
+        super().__init__()
+        self.scale = scale
+        pass  
     
-class DiagonalMatching:
+    def __call__(self, num_samples):
+        return torch.tensor(make_s_curve(n_samples=num_samples)[0][:, ::2], dtype=torch.float32) * self.scale
+
+
+class circle(twoDimension):
+    def __init__(self, scale=8) -> None:
+        super().__init__()
+        self.scale = scale
+        pass  
+    
+    def __call__(self, num_samples) -> Any:
+        return torch.tensor(make_circles(n_samples=num_samples)[0], dtype=torch.float32) * self.scale
+
+
+class DiagonalMatching(twoDimension):
 
     def __init__(self, ):
+        super().__init__()
         pass
         
 
@@ -125,7 +195,53 @@ class targetDiagonalMatching(DiagonalMatching):
         
     def __call__(self, num_samples):
         return self.sample(num_samples)['final']
+
+def rotate2d(x, radians):
+    """Build a rotation matrix in 2D, take the dot product, and rotate using PyTorch."""
+    radians = torch.tensor(radians, dtype=x.dtype)
+    c, s = torch.cos(radians), torch.sin(radians)
+    j = torch.tensor([[c, s], [-s, c]], dtype=x.dtype)
+    m = torch.matmul(j, x)
+    return m
+
+class Moon(twoDimension):
+    def __init__(self, ):
+        super().__init__()
+        pass
+    def sample(self, n_samples):
+        n = n_samples
+        x = torch.linspace(0, torch.pi, n // 2)
+        u = torch.stack([torch.cos(x) + 0.5, -torch.sin(x) + 0.2], dim=1) * 10.0
+        u += 0.5 * torch.normal(mean=0.0, std=1.0, size=u.shape)
+        u /= 3
+        v = torch.stack([torch.cos(x) - 0.5, torch.sin(x) - 0.2], dim=1) * 10.0
+        v += 0.5 * torch.normal(mean=0.0, std=1.0, size=v.shape)
+        v /= 3
+        samples = torch.cat([u, v], dim=0)
+
+        # rotate and shrink samples
+        samples_t = torch.zeros(samples.shape)
+        for i, v in enumerate(samples):
+            samples_t[i] = rotate2d(v, 180)
+
+        return {"initial": samples_t.float(),
+                "final": samples.float()}
+
+class sourceMoon(Moon):
+    def __init__(self,) -> None:
+        super().__init__()
+        pass  
     
+    def __call__(self, num_samples) -> Any:
+        return self.sample(num_samples)['initial']
+    
+class targetMoon(Moon):
+    def __init__(self,) -> None:
+        super().__init__()
+        pass  
+    
+    def __call__(self, num_samples) -> torch.Tensor:
+        return self.sample(num_samples)['final']
     
 if __name__ == "__main__":
     test = sourceDiagonalMatching()

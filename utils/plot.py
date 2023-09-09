@@ -1,5 +1,10 @@
 import numpy as np
 from matplotlib import pyplot as plt
+from pathlib import Path
+import shutil
+from rich.progress import track
+import imageio
+
 
 def plot_bridge(ts, bridge, source_sample, target_sample, show_rate=1.0, show_gt=False, title=r'Gaussian to 2$\times$Gaussian'):
     if show_rate < 1.0:
@@ -52,3 +57,93 @@ def plot_t(traj):
     
     fig.legend()
     return fig, ax
+
+
+def save_gif_frame(bridge, save_path=None, save_name=None, bound=15):
+    assert save_path is not None, "save_path cannot be None"
+    save_path = Path(save_path)
+    if not isinstance(bridge, np.ndarray):
+        try:
+            bridge = bridge.numpy()
+        except:
+            raise TypeError("bridge must be numpy.ndarray")
+
+    bridge = bridge.transpose((1, 0, 2))
+    bridge = bridge[::10, :, :]  if bridge.shape[0] >= 200 else bridge # 降低采样率
+    
+    temp_dir = save_path / 'temp'
+    if temp_dir.exists():
+        shutil.rmtree(temp_dir)
+    temp_dir.mkdir(exist_ok=True)
+    frame = 0
+    
+    color_map = -np.sqrt(bridge[0, :, 0]**2 + bridge[0, :, 1]**2)
+    for i in track(range(bridge.shape[0]), description="Processing image"):
+        fig, ax = plt.subplots(figsize=(8, 8))
+        ax.clear()
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        ax.set_xlim(-bound, bound)
+        ax.set_ylim(-bound, bound)
+        x = bridge[i, :, 0]  # 注意：
+        y = bridge[i, :, 1]  # 注意：
+        
+        ax.scatter(x, y, c=color_map, alpha=1, s=10)
+        fig.savefig(save_path / 'temp' / f'{frame:03d}.png', dpi=100)
+        frame += 1
+        fig.show()
+        plt.close('all')
+    frames = []
+    for i in range(bridge.shape[0]):
+        frame_image = imageio.imread(save_path / 'temp' / f'{i:03d}.png')
+        frames.append(frame_image)
+    imageio.mimsave(save_path/save_name, frames, duration=0.2)
+    if temp_dir.exists():
+        shutil.rmtree(temp_dir)
+        
+def save_gif_traj(bridge, save_path=None, save_name=None, bound=15):
+    assert save_path is not None, "save_path cannot be None"
+    save_path = Path(save_path)
+    if not isinstance(bridge, np.ndarray):
+        try:
+            bridge = bridge.numpy()
+        except:
+            raise TypeError("bridge must be numpy.ndarray")
+
+    bridge = bridge.transpose((1, 0, 2))
+    bridge = bridge[::10, :, :]  if bridge.shape[0] >= 200 else bridge # 降低采样率
+    
+    temp_dir = save_path / 'temp'
+    if temp_dir.exists():
+        shutil.rmtree(temp_dir)
+    temp_dir.mkdir(exist_ok=True)
+    frame = 0
+    
+    color_map = -np.sqrt(bridge[0, :, 0]**2 + bridge[0, :, 1]**2)
+    for i in track(range(bridge.shape[0]), description="Processing image"):
+        fig, ax = plt.subplots(figsize=(8, 8), dpi=200)
+        ax.clear()
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        ax.set_xlim(-bound, bound)
+        ax.set_ylim(-bound, bound)
+        x = bridge[i, :, 0]  # 注意：
+        y = bridge[i, :, 1]  # 注意：
+        
+        
+        for s in range(bridge.shape[1]):
+            ax.plot(bridge[:i,s, 0], bridge[:i,s, 1], c='gray', alpha=0.7, lw=0.2)
+        
+        ax.scatter(x, y, c=color_map, alpha=1, s=10)
+        
+        fig.savefig(save_path / 'temp' / f'{frame:03d}.png', dpi=100)
+        frame += 1
+        fig.show()
+        plt.close('all')
+    frames = []
+    for i in range(bridge.shape[0]):
+        frame_image = imageio.imread(save_path / 'temp' / f'{i:03d}.png')
+        frames.append(frame_image)
+    imageio.mimsave(save_path/save_name, frames, duration=0.2)
+    if temp_dir.exists():
+        shutil.rmtree(temp_dir)

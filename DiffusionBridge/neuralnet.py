@@ -130,7 +130,7 @@ class ScoreNetwork(torch.nn.Module):
         
 class FullScoreNetwork(torch.nn.Module):
 
-    def __init__(self, dimension, encoder_layers = [16], pos_dim = 16, decoder_layers = [128,128]):
+    def __init__(self, dimension, encoder_layers = [64], pos_dim = 64, decoder_layers = [256,256]):
         """
         Parameters
         ----------    
@@ -186,6 +186,72 @@ class FullScoreNetwork(torch.nn.Module):
         temb = get_timestep_embedding(t, self.temb_dim) # size (N, temb_dim)
         temb = self.t_encoder(temb) # size (N, t_enc_dim)
         states = torch.cat([x, x0], -1) # size (N, 2*dimension)
+        xemb = self.x_encoder(states) # size (N, t_enc_dim)
+        h = torch.cat([xemb, temb], -1) # size (N, 2 * t_enc_dim)
+        out = self.net(h) # size (N, dimension)
+        return out
+    
+class newFullScoreNetwork(torch.nn.Module):
+
+    def __init__(self, dimension, encoder_layers = [128], pos_dim = 128, decoder_layers = [512,512]):
+        """
+        Parameters
+        ----------    
+        dimension : int specifying dimension of state variable (same as output of network)
+
+        encoder_layers : list specifying width of each encoder layer 
+
+        pos_dim : int specifying dimension of time embedding
+
+        decoder_layers : list specifying width of each decoder layer 
+        """
+        super().__init__()
+        self.temb_dim = pos_dim
+        t_enc_dim = pos_dim * 2
+        self.locals = [encoder_layers, pos_dim, decoder_layers, dimension]
+
+        self.net = MLP(2 * t_enc_dim,
+                       layer_widths = decoder_layers + [dimension],
+                       activate_final = False,
+                       activation_fn = torch.nn.LeakyReLU())
+
+        self.t_encoder = MLP(pos_dim,
+                             layer_widths = encoder_layers + [t_enc_dim],
+                             activate_final = False,
+                             activation_fn = torch.nn.LeakyReLU())
+
+        self.x_encoder = MLP(3 * dimension,
+                             layer_widths = encoder_layers + [t_enc_dim],
+                             activate_final = False,
+                             activation_fn = torch.nn.LeakyReLU())
+
+    def forward(self, t, x, x0, xT):
+        """
+        Parameters
+        ----------
+        t : time step (N, 1)
+
+        x : state (N, dimension)
+
+        x0 : initial state (N, dimension)
+                        
+        Returns
+        -------    
+        out :  score (N, dimension)
+        """
+
+        # print(x.shape, x0.shape, xT.shape)
+        if len(x.shape) == 1:
+            x = x.unsqueeze(0)
+
+        if len(x0.shape) == 1:
+            x0 = x0.unsqueeze(0)
+            
+        if len(xT.shape) == 1:
+            xT = xT.unsqueeze(0)
+        temb = get_timestep_embedding(t, self.temb_dim) # size (N, temb_dim)
+        temb = self.t_encoder(temb) # size (N, t_enc_dim)
+        states = torch.cat([x, x0, xT], -1) # size (N, 2*dimension)
         xemb = self.x_encoder(states) # size (N, t_enc_dim)
         h = torch.cat([xemb, temb], -1) # size (N, 2 * t_enc_dim)
         out = self.net(h) # size (N, dimension)

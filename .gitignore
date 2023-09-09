@@ -4,3 +4,4 @@ temp/
 *.png
 *.jpg
 nohup.out
+experiments/
