@@ -167,6 +167,7 @@ def main_worker(args):
     target_sample = target_dist(num_test_samples)
     backward_out = diffusion.my_simulate_bridge_backwards(
         score_transition_net, source_sample, target_sample, epsilon, modify=False, full_score=True, full_model=args.full_model)
+    np.save('score_evaluations.npy', backward_out['score_evaluations'].detach().numpy())
     if not args.noforward:
         forward_out = diffusion.my_simulate_bridge_forwards(score_transition_net, score_marginal_net, source_sample,
                                                             target_sample, epsilon, num_samples=1, modify=True, full_score=True, new_num_steps=None)
