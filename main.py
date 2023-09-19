@@ -20,12 +20,8 @@ def get_dist(task):
         return sourceDiagonalMatching(), targetDiagonalMatching()
     elif task == 'gaussian2fourgaussian2d':
         return Gaussian2d(), fourGaussian2d()
-    elif task == 'gaussian2fourgaussian2dfar':
-        return Gaussian2d(), fourGaussian2d(m=20)
     elif task == 'gaussian2S':
         return Gaussian2d(), S()
-    elif task == 'gaussian2Sfar':
-        return Gaussian2d(mu=50), S()
     elif task == 'gaussian2ring':
         return Gaussian2d(), circle()
     elif task == 'moon2moon':
@@ -48,7 +44,6 @@ def main():
     parser.add_argument('--num_workers', type=int, default=0)
     parser.add_argument('--M', type=int, default=100)
     parser.add_argument('--lr', type=float, default=1e-2)
-    parser.add_argument('-f', '--full_model', action='store_true')
     # parser.add_argument('--iter_nums', type=int, default=1)
     # parser.add_argument('--epoch_nums', type=int, default=3)
     parser.add_argument('-bt', '--batch_size_tran', type=int, default=5000)
@@ -59,7 +54,7 @@ def main():
     parser.add_argument('--device', type=str)
     # parser.add_argument('-n','--normalize', action='store_true')
     # parser.add_argument('--num_workers', type=int, default=20)
-    parser.add_argument('--drift', type=str, default=None, choices=[None, 'bridge', 'process'])
+
     parser.add_argument('--noforward', action='store_true')
     parser.add_argument('--debug', action='store_true')
 
@@ -72,9 +67,7 @@ def main():
     np.random.seed(seed)
 
     experiment_name = args.task
-    if args.drift is not None:
-        experiment_name += f'_drift_{args.drift}'
-        
+
     if args.debug:
         log_dir = Path('experiments') / 'debug' / 'train' / \
             time.strftime("%Y-%m-%d/%H_%M_%S/")
@@ -124,15 +117,11 @@ def main_worker(args):
 
     if args.checkpoint_score is None:
         output = diffusion.my_learn_full_score_transition(
-            source_dist, target_dist, epsilon, 1, args.batch_size_tran, args.iters_tran, args.lr, ema_momentum, scheduler=args.scheduler, device=args.device, drift=args.drift, full_model=args.full_model)
+            source_dist, target_dist, epsilon, 1, args.batch_size_tran, args.iters_tran, args.lr, ema_momentum, scheduler=args.scheduler, device=args.device)
     else:
-        if args.continue_score:
-            output = diffusion.my_learn_full_score_transition(
-                source_dist, target_dist, epsilon, 1, args.batch_size_tran, args.iters_tran, args.lr, ema_momentum, scheduler=args.scheduler, device=args.device, drift=args.drift, full_model=args.full_model, checkpoint=args.checkpoint_score)
-        else:
-            output = diffusion.load_checkpoint_score(args.checkpoint_score, full_model=args.full_model)
-            console.log(
-                f"Loaded score checkpoint from {Path.absolute(args.checkpoint_score)}")
+        output = diffusion.load_checkpoint_score(args.checkpoint_score)
+        console.log(
+            f"Loaded score checkpoint from {Path.absolute(args.checkpoint_score)}")
     score_transition_net = output['net']
     console.log(
         f"Transition Model {score_transition_net.__class__.__name__} Parameters: {float(sum(p.numel() for p in score_transition_net.parameters())/1e6)}M")
@@ -166,14 +155,11 @@ def main_worker(args):
     source_sample = source_dist(num_test_samples)
     target_sample = target_dist(num_test_samples)
     backward_out = diffusion.my_simulate_bridge_backwards(
-        score_transition_net, source_sample, target_sample, epsilon, modify=False, full_score=True, full_model=args.full_model)
+        score_transition_net, source_sample, target_sample, epsilon, modify=True, full_score=True)
     if not args.noforward:
         forward_out = diffusion.my_simulate_bridge_forwards(score_transition_net, score_marginal_net, source_sample,
                                                             target_sample, epsilon, num_samples=1, modify=True, full_score=True, new_num_steps=None)
-    if args.drift is not None:
-        real_out = diffusion.my_simulate_bridge(source_sample, target_sample) if args.drift == 'bridge' else diffusion.my_simulate_process(source_sample, target_sample)
-    else:
-        real_out = diffusion.simulate_process(source_sample)
+    real_out = diffusion.my_simulate_process(source_sample, target_sample)
 
     console.rule("Results")
 
@@ -190,21 +176,16 @@ def main_worker(args):
         ).numpy().T, source_sample.numpy(), target_sample.numpy(), show_rate=1, show_gt=False)
         fig.savefig(args.log_dir / 'bridge_real.jpg')
 
-    elif args.task in ['t', 'gaussian2fourgaussian2dfar', 'gaussian2Sfar']:
-        fig, _ = plot_t(backward_out['trajectories'].detach().numpy(), bound=backward_out['trajectories'].abs().max().item()+1)
+    elif args.task == 't':
+        fig, _ = plot_t(backward_out['trajectories'].detach().numpy())
         fig.savefig(args.log_dir / 'bridge_backward.jpg')
         
         if not args.noforward:
-            fig, _ = plot_t(forward_out['trajectories'].detach().numpy(), bound=backward_out['trajectories'].abs().max().item()+1)
+            fig, _ = plot_t(forward_out['trajectories'].detach().numpy())
             fig.savefig(args.log_dir / 'bridge_forward.jpg')
 
-        fig, _ = plot_t(real_out['trajectories'].detach().numpy(), bound=backward_out['trajectories'].abs().max().item()+1)
+        fig, _ = plot_t(real_out['trajectories'].detach().numpy())
         fig.savefig(args.log_dir / 'bridge_real.jpg')
-        save_gif_traj(backward_out['trajectories'][:,:-1, :].detach().numpy(), save_path=args.log_dir, save_name='backward_bridge_traj.gif', bound=backward_out['trajectories'].abs().max().item()+1)
-        
-        fig, _ = plot_t(diffusion.simulate_process(source_sample)['trajectories'].detach().numpy(), bound=backward_out['trajectories'].abs().max().item()+1)
-        fig.savefig(args.log_dir / 'process.jpg')
-
     elif args.task in ['gaussian2fourgaussian2d', 'gaussian2S', 'gaussian2ring', 'moon2moon']:
         save_gif_frame(backward_out['trajectories'][:,:-1, :].detach().numpy(), save_path=args.log_dir, save_name='backward_bridge.gif')
         if not args.noforward:

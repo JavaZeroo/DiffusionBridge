@@ -52,46 +52,25 @@ class MLP(torch.nn.Module):
         """
         super(MLP, self).__init__()
         layers = []
-        norms = []
         prev_width = input_dim
         for layer_width in layer_widths:
             layers.append(torch.nn.Linear(prev_width, layer_width))
-            norms.append(torch.nn.LayerNorm(layer_width))
             # # same init for everyone
             # torch.nn.init.constant_(layers[-1].weight, 0)
             prev_width = layer_width
-            
         self.input_dim = input_dim
         self.layer_widths = layer_widths
         self.layers = torch.nn.ModuleList(layers)
-        self.norms = torch.nn.ModuleList(norms)
         self.activate_final = activate_final
         self.activation_fn = activation_fn
         
     def forward(self, x):
         for i, layer in enumerate(self.layers[:-1]):
             x = self.activation_fn(layer(x))
-            x = self.norms[i](x)
         x = self.layers[-1](x)
         if self.activate_final:
             x = self.activation_fn(x)
         return x
-
-
-class FullScoreNetworkWithLSTM(torch.nn.Module):
-    def __init__(self, dimension, lstm_hidden_size, pos_dim=128, decoder_layers=[256, 256]):
-        super().__init__()
-        self.temb_dim = pos_dim
-        self.lstm = torch.nn.LSTM(input_size=pos_dim, hidden_size=lstm_hidden_size, batch_first=True)
-        # 其他初始化代码保持不变
-
-    def forward(self, t, x, x0):
-        # 其他代码保持不变
-        temb = get_timestep_embedding(t, self.temb_dim)
-        lstm_out, _ = self.lstm(temb.view(len(temb), 1, -1))
-        temb = lstm_out.view(len(temb), -1)
-        # 其他代码保持不变
-
 
 class ScoreNetwork(torch.nn.Module):
 
@@ -115,17 +94,17 @@ class ScoreNetwork(torch.nn.Module):
         self.net = MLP(2 * t_enc_dim,
                        layer_widths = decoder_layers + [dimension],
                        activate_final = False,
-                       activation_fn = torch.nn.SiLU())
+                       activation_fn = torch.nn.LeakyReLU())
 
         self.t_encoder = MLP(pos_dim,
                              layer_widths = encoder_layers + [t_enc_dim],
                              activate_final = False,
-                             activation_fn = torch.nn.SiLU())
+                             activation_fn = torch.nn.LeakyReLU())
 
         self.x_encoder = MLP(dimension,
                              layer_widths = encoder_layers + [t_enc_dim],
                              activate_final = False,
-                             activation_fn = torch.nn.SiLU())
+                             activation_fn = torch.nn.LeakyReLU())
 
     def forward(self, t, x):
         """
@@ -171,19 +150,17 @@ class FullScoreNetwork(torch.nn.Module):
         self.net = MLP(2 * t_enc_dim,
                        layer_widths = decoder_layers + [dimension],
                        activate_final = False,
-                       activation_fn = torch.nn.SiLU())
+                       activation_fn = torch.nn.LeakyReLU())
 
         self.t_encoder = MLP(pos_dim,
                              layer_widths = encoder_layers + [t_enc_dim],
-                             activate_final = True,
-                             activation_fn = torch.nn.SiLU())
+                             activate_final = False,
+                             activation_fn = torch.nn.LeakyReLU())
 
         self.x_encoder = MLP(2 * dimension,
                              layer_widths = encoder_layers + [t_enc_dim],
-                             activate_final = True,
-                             activation_fn = torch.nn.SiLU())
-        self.lstm = torch.nn.LSTM(input_size=4 * pos_dim, hidden_size=2 * t_enc_dim, batch_first=True)
-
+                             activate_final = False,
+                             activation_fn = torch.nn.LeakyReLU())
 
     def forward(self, t, x, x0):
         """
@@ -211,16 +188,12 @@ class FullScoreNetwork(torch.nn.Module):
         states = torch.cat([x, x0], -1) # size (N, 2*dimension)
         xemb = self.x_encoder(states) # size (N, t_enc_dim)
         h = torch.cat([xemb, temb], -1) # size (N, 2 * t_enc_dim)
-        # print(h.shape)
-        lstm_out, _ = self.lstm(h.view(len(h), 1, -1))
-        h = lstm_out.view(len(h), -1)
-        # print(h.shape)
         out = self.net(h) # size (N, dimension)
         return out
     
 class newFullScoreNetwork(torch.nn.Module):
 
-    def __init__(self, dimension, encoder_layers = [64], pos_dim = 64, decoder_layers = [256,256]):
+    def __init__(self, dimension, encoder_layers = [128], pos_dim = 128, decoder_layers = [512,512]):
         """
         Parameters
         ----------    
@@ -240,17 +213,17 @@ class newFullScoreNetwork(torch.nn.Module):
         self.net = MLP(2 * t_enc_dim,
                        layer_widths = decoder_layers + [dimension],
                        activate_final = False,
-                       activation_fn = torch.nn.SiLU())
+                       activation_fn = torch.nn.LeakyReLU())
 
         self.t_encoder = MLP(pos_dim,
                              layer_widths = encoder_layers + [t_enc_dim],
                              activate_final = False,
-                             activation_fn = torch.nn.SiLU())
+                             activation_fn = torch.nn.LeakyReLU())
 
         self.x_encoder = MLP(3 * dimension,
                              layer_widths = encoder_layers + [t_enc_dim],
                              activate_final = False,
-                             activation_fn = torch.nn.SiLU())
+                             activation_fn = torch.nn.LeakyReLU())
 
     def forward(self, t, x, x0, xT):
         """
