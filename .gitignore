@@ -5,3 +5,4 @@ temp/
 *.jpg
 nohup.out
 experiments/
+*.npy
