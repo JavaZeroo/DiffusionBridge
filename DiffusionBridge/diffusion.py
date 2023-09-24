@@ -52,6 +52,11 @@ class model(torch.nn.Module):
         # dydt = torch.tensor(0)
         dydt = terminate_states - now_states
         return dydt
+    
+    def gen_bridge(self, time, now_states, terminate_states):
+        # dydt = torch.tensor(0)
+        dydt = (terminate_states - now_states) / (self.T - time)
+        return dydt
 
     def simulate_process(self, initial_states):
         """
@@ -721,17 +726,17 @@ class model(torch.nn.Module):
         N = trajectories.shape[0]
         M = self.num_steps
         grad = torch.zeros(N, M, self.d)
-        X0 = trajectories[:, 0, :]
+        XT = trajectories[:, -1, :]
 
         for m in range(M):
-            X_next = trajectories[:, m+1, :]
-            if (m == (M-1)):
-                # fudging a little here because of singularity
-                t_next = self.time[m+1] - 0.25 * self.stepsizes[m]
-            else:
-                t_next = self.time[m+1]
-            grad[:, m, :] = scaled_brownian[:, m, :] - epsilon * \
-                self.invSigma * (X0 - X_next) / (self.T - t_next)
+            X_next = trajectories[:, m, :]
+            # if (m == (M-1)):
+            #     # fudging a little here because of singularity
+            #     t_next = self.time[m+1] - 0.25 * self.stepsizes[m]
+            # else:
+            t_next = self.time[m]
+            grad[:, m, :] = scaled_brownian[:, m, :] - \
+                self.invSigma * self.gen_drift(t_next, X_next, XT)
 
         return grad
 
@@ -990,6 +995,7 @@ class model(torch.nn.Module):
             scheduler = OneCycleLR(
                 optimizer, max_lr=learning_rate, total_steps=num_iterations)
         printt = True
+        save = True
         with Progress(
             SpinnerColumn(spinner_name='moon'),
             *Progress.get_default_columns(),
@@ -1029,8 +1035,14 @@ class model(torch.nn.Module):
                     scaled = simulation_output['scaled_brownian']
 
                     # evaluate gradient function
+                    
+                    
                     grad = self.gradient_transition(
                         traj, scaled, epsilon)  # size (N, M, d)
+                    if save:
+                        import numpy as np
+                        np.save('grad.npy', grad.detach().cpu().numpy())
+                    
                     grad_flatten = grad.flatten(
                         start_dim=0, end_dim=1)  # size (N*M, d)
 

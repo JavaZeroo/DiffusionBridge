@@ -22,10 +22,12 @@ def get_dist(task):
         return Gaussian2d(), fourGaussian2d()
     elif task == 'gaussian2fourgaussian2dfar':
         return Gaussian2d(), fourGaussian2d(m=20)
+    elif task == 'S2fourgaussian2dfar':
+        return S(), fourGaussian2d(m=20)
     elif task == 'gaussian2S':
         return Gaussian2d(), S()
     elif task == 'gaussian2Sfar':
-        return Gaussian2d(mu=50), S()
+        return Gaussian2d(mu=20), S()
     elif task == 'gaussian2ring':
         return Gaussian2d(), circle()
     elif task == 'moon2moon':
@@ -171,10 +173,8 @@ def main_worker(args):
     if not args.noforward:
         forward_out = diffusion.my_simulate_bridge_forwards(score_transition_net, score_marginal_net, source_sample,
                                                             target_sample, epsilon, num_samples=1, modify=True, full_score=True, new_num_steps=None)
-    if args.drift is not None:
-        real_out = diffusion.my_simulate_bridge(source_sample, target_sample) if args.drift == 'bridge' else diffusion.my_simulate_process(source_sample, target_sample)
-    else:
-        real_out = diffusion.simulate_process(source_sample)
+    
+    real_out = diffusion.my_simulate_bridge(source_sample, target_sample)
 
     console.rule("Results")
 
@@ -191,7 +191,7 @@ def main_worker(args):
         ).numpy().T, source_sample.numpy(), target_sample.numpy(), show_rate=1, show_gt=False)
         fig.savefig(args.log_dir / 'bridge_real.jpg')
 
-    elif args.task in ['t', 'gaussian2fourgaussian2dfar', 'gaussian2Sfar']:
+    elif args.task in ['t', 'gaussian2fourgaussian2dfar', 'gaussian2Sfar', 'S2fourgaussian2dfar']:
         fig, _ = plot_t(backward_out['trajectories'].detach().numpy(), bound=backward_out['trajectories'].abs().max().item()+1)
         fig.savefig(args.log_dir / 'bridge_backward.jpg')
         
