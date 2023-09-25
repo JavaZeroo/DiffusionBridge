@@ -121,13 +121,29 @@ class fourGaussian2d(twoDimension):
         return torch.concatenate(target_dist_list)
 
 class S(twoDimension):
-    def __init__(self, scale=3) -> None:
+    def __init__(self, scale=3, drift=[0, 0]) -> None:
         super().__init__()
         self.scale = scale
+        self.drift = torch.tensor(drift)
         pass  
     
     def __call__(self, num_samples):
-        return torch.tensor(make_s_curve(n_samples=num_samples)[0][:, ::2], dtype=torch.float32) * self.scale
+        return torch.tensor(make_s_curve(n_samples=num_samples)[0][:, ::2], dtype=torch.float32) * self.scale + self.drift
+
+class fourS(twoDimension):
+    def __init__(self, scale=3, drift_all=0) -> None:
+        super().__init__()
+        self.scale = scale
+        self.Ss = []
+        for i in [(drift_all, drift_all), (drift_all, -drift_all), (-drift_all, drift_all), (-drift_all, -drift_all)]:
+            self.Ss.append(S(scale, i))
+        pass  
+    
+    def __call__(self, num_samples):
+        ret = []
+        for s in self.Ss:
+            ret.append(s(int(num_samples/4)))
+        return torch.concat(ret, dim=0)
 
 
 class circle(twoDimension):

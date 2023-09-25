@@ -9,7 +9,7 @@ from rich.pretty import Pretty
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn
 
-from utils.data import Gaussian, twoGaussian, sourceDiagonalMatching, targetDiagonalMatching, Gaussian2d, fourGaussian2d, S, circle, sourceMoon, targetMoon
+from utils.data import Gaussian, twoGaussian, sourceDiagonalMatching, targetDiagonalMatching, Gaussian2d, fourGaussian2d, S, fourS, circle, sourceMoon, targetMoon
 from utils.plot import plot_bridge, plot_t, save_gif_frame, save_gif_traj
 
 
@@ -23,7 +23,9 @@ def get_dist(task):
     elif task == 'gaussian2fourgaussian2dfar':
         return Gaussian2d(), fourGaussian2d(m=20)
     elif task == 'S2fourgaussian2dfar':
-        return S(), fourGaussian2d(m=20)
+        return S(), fourGaussian2d(m=50)
+    elif task == 'S2fourS':
+        return S(), fourS(drift_all=20)
     elif task == 'gaussian2S':
         return Gaussian2d(), S()
     elif task == 'gaussian2Sfar':
@@ -191,7 +193,7 @@ def main_worker(args):
         ).numpy().T, source_sample.numpy(), target_sample.numpy(), show_rate=1, show_gt=False)
         fig.savefig(args.log_dir / 'bridge_real.jpg')
 
-    elif args.task in ['t', 'gaussian2fourgaussian2dfar', 'gaussian2Sfar', 'S2fourgaussian2dfar']:
+    elif args.task in ['t', 'gaussian2fourgaussian2dfar', 'gaussian2Sfar', 'S2fourgaussian2dfar', 'S2fourS']:
         fig, _ = plot_t(backward_out['trajectories'].detach().numpy(), bound=backward_out['trajectories'].abs().max().item()+1)
         fig.savefig(args.log_dir / 'bridge_backward.jpg')
         
