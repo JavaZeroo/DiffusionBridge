@@ -195,22 +195,23 @@ class DiagonalMatching(twoDimension):
             "initial": initial,
             "final": final
         }
-
 class sourceDiagonalMatching(DiagonalMatching):
-    
-    def __init__(self, ):
+  
+    def __init__(self, drift=0):
+        self.drift = torch.tensor([-drift, drift])
         super().__init__()
-        
+
     def __call__(self, num_samples):
-        return self.sample(num_samples)['initial']
-    
+        return self.sample(num_samples)['initial'] + self.drift
+
 class targetDiagonalMatching(DiagonalMatching):
-    
-    def __init__(self, ):
+
+    def __init__(self, drift=0):
+        self.drift = torch.tensor([drift, -drift])
         super().__init__()
-        
+
     def __call__(self, num_samples):
-        return self.sample(num_samples)['final']
+        return self.sample(num_samples)['final'] + self.drift
 
 def rotate2d(x, radians):
     """Build a rotation matrix in 2D, take the dot product, and rotate using PyTorch."""

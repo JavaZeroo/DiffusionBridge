@@ -18,6 +18,8 @@ def get_dist(task):
         return Gaussian(), twoGaussian()
     elif task == 't':
         return sourceDiagonalMatching(), targetDiagonalMatching()
+    elif task == 'tfar':
+        return sourceDiagonalMatching(drift=20), targetDiagonalMatching(drift=20)
     elif task == 'gaussian2fourgaussian2d':
         return Gaussian2d(), fourGaussian2d()
     elif task == 'gaussian2fourgaussian2dfar':
@@ -193,7 +195,7 @@ def main_worker(args):
         ).numpy().T, source_sample.numpy(), target_sample.numpy(), show_rate=1, show_gt=False)
         fig.savefig(args.log_dir / 'bridge_real.jpg')
 
-    elif args.task in ['t', 'gaussian2fourgaussian2dfar', 'gaussian2Sfar', 'S2fourgaussian2dfar', 'S2fourS']:
+    elif args.task in ['t', 'tfar', 'gaussian2fourgaussian2dfar', 'gaussian2Sfar', 'S2fourgaussian2dfar', 'S2fourS']:
         fig, _ = plot_t(backward_out['trajectories'].detach().numpy(), bound=backward_out['trajectories'].abs().max().item()+1)
         fig.savefig(args.log_dir / 'bridge_backward.jpg')
         
